@@ -1,6 +1,6 @@
 # FairML
 
-The following contains the code for the fair SVM and fair PCA procedures. Descriptions of the individual files are as follows:
+The following contains the code for the fair SVM and fair PCA procedures, as well as some the datasets used (after some cleaning). All data downloaded from the UC Irvine online Machine Learning Repository (citation below). Descriptions of the individual code files are as follows:
 
 problem.py: A problem object is the main unit of action in this package. It encapsulates the data for any problem, and is the conduit through which various fair and unfair SVM and PCA algorithms can be run on the data, as well as the conduit through which the results of these algorithms may be plotted and analyzed. Also contains procedures for testing algorithm and generating plots of interest used in the paper.
 
@@ -19,3 +19,5 @@ image.py: Generates a dummy plot to motivate covariance constraints (NOT USED).
 gurMod.py: Gurobi implementation of older versions of fair SVM algorithm (NOT USED).
 
 SVM_Extras.py: Original SDP formulation of the fair SVM problem (NOT USED).
+
+Lichman, M. (2013). UCI Machine Learning Repository [http://archive.ics.uci.edu/ml]. Irvine, CA: University of California, School of Information and Computer Science. 
