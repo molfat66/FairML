@@ -3,6 +3,10 @@
 Created on Tue Dec  5 20:45:15 2017
 
 @author: mahbo
+
+Mosek implementation of FPCA that can only find one PC. Functionality is provided to
+quickly project data in anticipation of use in finding multiple PC's
+
 """
 
 import sys, mosek, math, copy, time, numpy as np

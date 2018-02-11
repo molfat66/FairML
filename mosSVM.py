@@ -3,6 +3,10 @@
 Created on Thu Oct 26 19:01:17 2017
 
 @author: mahbo
+
+Mosek implementation of fair SVM, with functionality for both kernal and linear SVM.
+Functionality also provided for iterative fair SVM procedure, although this is not used
+
 """
 
 import mosek, math, copy, time, pdb, numpy as np, scipy.linalg as la

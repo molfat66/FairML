@@ -3,6 +3,10 @@
 Created on Mon Jan  1 22:39:15 2018
 
 @author: mahbo
+
+Mosek implementation of FPCA that handles all desired PC's at once. Records all
+constraints and symmetric matrices defined in the task object for aiding in debugging
+
 """
 
 import sys, mosek, math, copy, time, numpy as np, scipy.linalg as la
@@ -12,6 +16,7 @@ def streamprinter(text):
     sys.stdout.flush()
     
 def getSymMat(mod,name):
+    # Given the name of a symmetric matrix, returns its contents in sparse format
     idx = [i for i,(word,nnz) in enumerate(mod.symmats) if word==name]
     if len(idx)==0:
         print('no such symmat')

@@ -3,6 +3,9 @@
 Created on Thu Oct 26 17:56:40 2017
 
 @author: mahbo
+
+Gurobi implementation of older versions of fair SVM algorithm (NOT USED)
+
 """
 
 import copy, numpy as np

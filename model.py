@@ -3,6 +3,7 @@
 Created on Thu Oct 26 18:25:32 2017
 
 @author: mahbo
+
 """
 
 import warnings, numpy as np, scipy.linalg as la
@@ -26,7 +27,12 @@ def maxROC(m,dat,rsp,pred=None,perc=1):
     return max(roc), pred[predSort[brange[np.argmax(roc)]]]
 
 class model():
-    
+    # A model object is the conduit through which all optimization is done. It stand to
+    # handle the different types of optimization objects from a unified framework from
+    # the perspective of the problem object. It has the added benefit of being a self
+    # contained optimization, allowing for cross-validation or comparisons at the level
+    # of the problem object without having to define all of the extra variables and
+    # constraint coefficients associated with each individual optimization
     def __init__(self, dat, rsp=None, lam=1, conic=True, dual=False, kernel=None, isPCA=False, dimPCA=None, outputFlag=False):
         self.isGur = False
         self.numPoints = dat.shape[0]
@@ -63,12 +69,14 @@ class model():
             self.m = mosSVM(rsp,dat,lam,conic,dual,self.K,self.Y,outputFlag=outputFlag)
         
     def kFold(self, k=5):
+        # Splits data into k folds
         idx = np.arange(self.numPoints)
         np.random.shuffle(idx)
         folds = [idx[int(i*self.numPoints/k):int((i+1)*self.numPoints/k)] for i in range(k)]
         return folds
     
     def optimize(self, outputFlag=False) -> None:
+        # Runs the optimization procedure
         self.m.optimize()
         self.RunTime = self.m.m.RunTime if self.isGur else self.m.RunTime
         self.B = np.array(self.m.getB())
@@ -80,6 +88,7 @@ class model():
         if outputFlag: print("Optimization time: %s" % (round(self.RunTime,2)))
     
     def getStatus(self):
+        # Returns the status of the optimizer
         if self.isGur:
             stat = self.m.m.Status
             if stat in [2,13]: return 'optimal'
@@ -95,23 +104,29 @@ class model():
             else: return 'other'
             
     def getRHS(self):
+        # Returns vector of right-hand-sides (ONLY WORKS FOR MOSEK)
         return self.m.getRHS()
     
     def getZCon(self, rsp):
+        # Returns the coefficients of the mean constraint
         rsp = rsp.astype(bool)
         return (2*self.rsp-1)*(np.mean(self.K[rsp],axis=0)-np.mean(self.K[~rsp],axis=0)) if self.dual\
         else np.mean(self.m.dat[rsp],axis=0)-np.mean(self.m.dat[~rsp],axis=0)
     
     def getK(self,test):
+        # Returns the Grammian K(X,test) (ONLY FOR KERNEL SVM)
         if len(test.shape)==1: return np.array([self.kernel(x1,test) for x1 in self.m.dat]).reshape((self.numPoints,1))
         return np.array([self.kernel(x1,x2) for x1 in self.m.dat for x2 in test]).reshape((self.numPoints,test.shape[0] if len(test.shape)>1 else 1))
     
     def getSig(self,rsp):
+        # For some subset of the data, returns the mean-normalized covariance matrix
         mat = self.K if self.dual else self.m.dat
         return mat[rsp].T.dot(np.eye(sum(rsp))-np.ones((sum(rsp),sum(rsp)))/sum(rsp)).dot(mat[rsp])/sum(rsp)
         #return MinCovDet().fit(mat[rsp]+np.random.normal(scale=1e-6,size=mat[rsp].shape)).covariance_
     
     def pred(self,test):
+        # Given the results of the model object, generates predictions on some test set
+        # (NOT AVAILABLE FOR GUROBI)
         if self.isGur:
             print('Functionality not available with Gurobi')
             return None
@@ -121,15 +136,18 @@ class model():
             return test.dot(self.B)[:,0]
             
     def setLam(self, lam) -> None:
+        # Fixes hyperparameter lambda
         self.m.setLam(lam)
         
     def addConstr(self, coeff, idx=0, rhs=0, label=None, record=True) -> None:
+        # Handles the addition of a single linear constraint and records it
         self.m.addConstr(coeff,idx,rhs,label,record) if self.isGur\
         else self.m.addConstr(np.tensordot(coeff,coeff,axes=0),rhs**2)
         #else self.m.addConstr(coeff, rhs, record) CHANGE BACK IF NOT MOSPCAMULT
         if record: self.numProjCons += 1
     
     def addQuadConstr(self, rsp, mu=1, B0=None, dualize=True):
+        # Handles the addition of a single covariance constraint (ONLY FOR MOSEK)
         if self.isGur:
             print('Functionality not available with Gurobi')
             return None
@@ -149,21 +167,29 @@ class model():
             return self.m.addQuadConstr(V1, V2, mu, B0)
     
     def relaxConstr(self, rhs) -> None:
+        # Relaxes a set of constraints (ONLY FOR MOSEK)
         self.m.relaxConstr(rhs)
     
     def updateQuadConstr(self, B0) -> None:
+        # Updates the linear portion of a relaxed covariance constraint
+        # (ONLY FOR CONVEX-CONCAVE PROCEDURE IN SVM AND WITH MOSEK)
         if self.isGur:
             print('Functionality not available with Gurobi')
         else:
             self.m.updateQuadConstr(B0, self.U1, self.U2)
             
     def projCons(self, projMat=None) -> None:
+        # Projects all data according to given matrix and updates optimization model
+        # (ONLY FOR MOSEK)
         if self.isGur:
             print('Functionality not available with Gurobi')
         else:
             self.m.projCons(projMat)
             
     def lambdaCrossVal(self, folds=None, lams=[1e-3,1e-2,1e-1,1,1e1,1e2], errType=0, resp=None, k=5):
+        # Given potential lambda values and desired error metrix, runs cross-validation
+        # via splitting of problem data into training and testing sets, and sets lambda
+        # to the value that returns the best average results
         if len(lams)==1:
             self.m.setLam(lams[0])
             return lams[0]
