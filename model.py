@@ -9,7 +9,7 @@ Created on Thu Oct 26 18:25:32 2017
 import warnings, numpy as np, scipy.linalg as la
 from gurMod import *
 from mosSVM import *
-from mosPCA import *
+#from mosPCA import *
 from mosPCAMult import *
 from sklearn.covariance import MinCovDet
 warnings.filterwarnings('ignore')
