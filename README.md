@@ -22,7 +22,7 @@ All datasets included were downloaded from the UC Irvine online Machine Learning
 
 3. The file mosPCAMult.py includes a Mosek implementation of FPCA that handles all desired PC's at once. The object also records all constraints and symmetric matrices defined in the task object for aiding in debugging.
 
-4. The file mosSVM.py inlcludes a Mosek implementation of fair SVM, with functionality for both kernel and linear SVM. Functionality also provided in this file for iterative fair SVM procedure, although this is not referenced in the papers.
+4. The file mosSVM.py inlcludes a Mosek implementation of fair SVM, with functionality for both kernel and linear SVM.
 
 5. The file gurMod.py includes a Gurobi implementation of the fair SVM algorithm, although it lacks functionality for handling covariance constraints.
 
