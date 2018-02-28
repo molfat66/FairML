@@ -156,38 +156,54 @@ class problem():
         if m is None: m = model(dat,mrsp if not useSRSP else srsp,conic=conic,dual=dual,kernel=kernel)
         if lams is not None: lam = m.lambdaCrossVal(lams=lams,errType=0)
         m.optimize()
-        err = round(maxROC(m,dat,srsp)[0],4)
+        err,b = maxROC(srsp,m,dat)
         if outputFlag: print("\tOptimization time: %02d:%02d\n\tTotal running time: %02d:%02d\n\tMaximum Error: %s"\
                              % (int(m.RunTime/60),round(m.RunTime%60),int((time.time()-totTime)/60),\
-                                round((time.time()-totTime)%60),err))
-        return m.B, m, err # may cause errors, remove last item
+                                round((time.time()-totTime)%60),round(err,4)))
+        return m.B, m, err, b # may cause errors, remove last two items
     
-    def zsvm(self, d, m=None, lams=None, conic=True, dual=False, kernel=None, split=False, outputFlag=False):
+    def zsvm(self, d=0, m=None, lams=None, conic=True, dual=False, kernel=None, split=False, outputFlag=False):
         # Runs the fair SVM with only the mean constraint and calculates statistics
         dat, mrsp, srsp, numPnt = self.checkIfSplit(split)
         
         totTime = time.time()
-        if m is None: m = model(dat,mrsp,conic=conic,dual=dual,kernel=kernel,isGur=self.isGur)
+        if m is None: m = model(dat,mrsp,conic=conic,dual=dual,kernel=kernel)
         if lams is not None: lam = m.lambdaCrossVal(lams=lams,errType=2)
         m.addConstr(m.getZCon(srsp),rhs=d,label='linCon',record=False)
         m.optimize()
         if outputFlag: print("Optimization time: %s:%s\nTotal running time: %s:%s\nMaximum Error: %s"\
                              % (int(m.RunTime/60),round(m.RunTime%60),int((time.time()-totTime)/60),\
-                                round((time.time()-totTime)%60),round(maxROC(m,dat,srsp)[0],4)))
+                                round((time.time()-totTime)%60),round(maxROC(srsp,m,dat)[0],4)))
         return m.B, m
     
-    def ssvm(self, d, mu=1, lams=None, conic=True, dual=False, maxiters=10, m=None, B0=None, zeroThresh=1e-6, split=False, outputFlag=False):
+    def ssvmNew(self, d=0, mu=1, lams=None, conic=True, dual=False, maxiters=10, m=None, B0=None, zeroThresh=1e-6, split=False, outputFlag=False):
+        # Runs the fair SVM with both constraints, implementing the convex-concave
+        # procedure and calculating relevant statistics
+        dat, mrsp, srsp, numPnt = self.checkIfSplit(split)
+        
+        totTime = time.time()
+        if m is None: m = model(dat,mrsp,conic=conic,dual=dual)
+        m.addConstr(m.getZCon(srsp),rhs=d,label='linCon',record=False)
+        if lams is not None: lam = m.lambdaCrossVal(lams=lams,errType=2)
+        m.addQuadConstr(srsp.astype(bool),mrsp=mrsp.astype(bool),d=d,mu=mu,dualize=dual)
+        m.optimize()
+        if outputFlag: print("Optimization time: %s:%s\nTotal running time: %s:%s\nMaximum Error: %s"\
+                             % (int(m.RunTime/60),round(m.RunTime%60),int((time.time()-totTime)/60),\
+                                round((time.time()-totTime)%60),round(maxROC(srsp,m,dat)[0],4)))
+        return m.B, m
+    
+    def ssvm(self, d=0, mu=1, lams=None, conic=True, dual=False, maxiters=10, m=None, B0=None, zeroThresh=1e-6, split=False, outputFlag=False):
         # Runs the fair SVM with both constraints, implementing the convex-concave
         # procedure and calculating relevant statistics
         dat, mrsp, srsp, numPnt = self.checkIfSplit(split)
                 
         totTime = time.time()
         optTime = 0
-        if m is None: m = model(dat,mrsp,conic=conic,dual=dual,isGur=self.isGur)
+        if m is None: m = model(dat,mrsp,conic=conic,dual=dual)
         
         m.addConstr(m.getZCon(srsp),rhs=d,label='linCon',record=False)
         if lams is not None: lam = m.lambdaCrossVal(lams=lams,errType=2)
-        prevB = m.addQuadConstr(srsp.astype(bool),mu,B0)
+        prevB = m.addQuadConstrOld(srsp.astype(bool),mu,B0)
         optTime += m.RunTime
         
         for i in range(maxiters):
@@ -204,7 +220,7 @@ class problem():
             if outputFlag: print('Done iteration',i,m.m.t)
         if outputFlag: print("Optimization time: %s:%s\nTotal running time: %s:%s\nMaximum Error: %s"\
                              % (int(optTime/60),round(optTime%60),int((time.time()-totTime)/60),\
-                                round((time.time()-totTime)%60),round(maxROC(m,dat,srsp)[0],4)))
+                                round((time.time()-totTime)%60),round(maxROC(srsp,m,dat)[0],4)))
         return m.B, m
     
     def iterRun(self, d=0.1, m=None, maxiters=20, maxRelax=10, zeroThresh=1e-6, binSearch=1,\
@@ -288,7 +304,7 @@ class problem():
                 break
             # calculate max unfairness, break if within threshold
             bestB = copy.deepcopy(mainMod.B)
-            maxErr = maxROC(mainMod,dat,srsp)[0]
+            maxErr = maxROC(srsp,mainMod,dat)[0]
             if outputFlag: print('Iteration %s error: %s' % (i+1,round(maxErr,4)),\
                                  (', side lambda: %s, main lambda: %s'%(sideLam,mainLam))\
                                  if lams is not None else '')
@@ -313,7 +329,7 @@ class problem():
         # to defined constraint d
         if dnBnd is None: dnBnd = m.getRHS()
         if upBnd is None: upBnd = np.ones(m.numProjCons)
-        prevMaxErr = maxROC(m,dat,srsp)[0]
+        prevMaxErr = maxROC(srsp,m,dat)[0]
         for i in range(maxiters):
             m.relaxConstr((upBnd+dnBnd)/2)
             m.optimize()
@@ -321,7 +337,7 @@ class problem():
                 print('Encountered solver error, status %s, assuming error = -inf'%m.getStatus())
                 dnBnd = copy.deepcopy((upBnd+dnBnd)/2)
                 continue
-            maxErr = maxROC(m,dat,srsp)[0]
+            maxErr = maxROC(srsp,m,dat)[0]
             print('Ran iteration %s in binary search, found max error of %s' % (i+1,round(maxErr,4)))
             if maxErr<=d:
                 if maxErr+thresh>d or round(maxErr,8)==round(prevMaxErr,8): break
@@ -332,43 +348,49 @@ class problem():
         if maxErr>d:
             m.relaxConstr((upBnd+dnBnd)/2)
             m.optimize()
-        return maxROC(m,dat,srsp)[0], m.B, i
+        return maxROC(srsp,m,dat)[0], m.B, i
     
-    def ROC(self, m=None, perc=0.25, pred=None, split=False):
+    def ROC(self, m=None, perc=1, pred=None, split=False):
         # Given run of fair SVM, calculates data for ROC of main and side responses
         dat, mrsp, srsp, numPnt = self.checkIfSplit(split, test=True)
         
         if pred is None and m is None: print('Not enough inputs')
         if pred is None: pred = m.pred(dat)
+        if perc!=1: pred = copy.copy(pred[[np.sort(np.random.choice(range(len(pred)),int(perc*len(pred)),replace=False))]])
         predSort = np.argsort(pred.flatten()).astype(int)
-        mrsp = mrsp[predSort]
-        srsp = srsp[predSort]
-        msum1 = np.sum(mrsp); msum0 = np.sum(1-mrsp)
-        ssum1 = np.sum(srsp); ssum0 = np.sum(1-srsp)
-        brange = np.sort(np.random.choice(range(len(predSort)),int(perc*len(predSort)),replace=False))
-        main = np.array([[np.sum(1-mrsp[b:])/msum0 for b in brange],[np.sum(mrsp[b:])/msum1 for b in brange]])
-        side = np.array([[np.sum(1-srsp[b:])/ssum0 for b in brange],[np.sum(srsp[b:])/ssum1 for b in brange]])
+        mrsp = copy.copy(mrsp[predSort])
+        srsp = copy.copy(srsp[predSort])
+        msum1 = sum(mrsp); msum0 = sum(1-mrsp)
+        ssum1 = sum(srsp); ssum0 = sum(1-srsp)
+        if msum1==0 or msum0==0 or ssum1==0 or ssum0==0:
+            print('ONE OF SETS VACUOUS')
+            print(msum1,msum0,ssum1,ssum0)
+            return
+        mrsp1 = msum1-np.cumsum(mrsp); mrsp0 = msum0-np.cumsum(1-mrsp)
+        srsp1 = ssum1-np.cumsum(srsp); srsp0 = ssum0-np.cumsum(1-srsp)
+        main = np.array([mrsp0/msum0,mrsp1/msum1])
+        side = np.array([srsp0/ssum0,srsp1/ssum1])
         return main, side
     
-    def ROCStats(self, m, perc=0.5, split=False):
+    def ROCStats(self, m, perc=1, split=False):
         # Given run of fair SVM, returns AUC for ROC of main predictor and fairness
         # level for ROC of side predictor
         main, side = self.ROC(m,perc,split)
         return trapz(main[1],main[0]), max(np.abs(side[1]-side[0]))
     
-    def plot(self, m=None, perc=0.5, pred=None, figsize=(6,6), split=False, thresholds=[], title=None, graph=True):
+    def plot(self, m=None, perc=1, pred=None, figsize=(6,6), split=False, thresholds=[], title=None, graph=True):
         # Plots ROC curves resulting from fair SVM
         dat, mrsp, srsp, numPnt = self.checkIfSplit(split, test=True)
         if pred is None and m is None: print('Not enough inputs')
         if pred is None: pred = m.pred(dat)
         
-        main, side = self.ROC(m,perc=perc,pred=pred,split=split)
+        main,side = self.ROC(m,perc=perc,pred=pred,split=split)
         xthresh = [np.sum((1-srsp)*(pred>=b))/np.sum(1-srsp) for b in thresholds]
         ythresh = [np.sum(srsp*(pred>=b))/(np.sum(srsp)) for b in thresholds]
         if graph: graphROC(main, side, xthresh, ythresh, figsize, title)
         return main, side, xthresh, ythresh
     
-    def plotComp(self, m1, m2, perc=0.25, title=None, figsize=(6,6), split=False, method1='original', method2='modified'):
+    def plotComp(self, m1, m2, perc=1, title=None, figsize=(6,6), split=False, method1='original', method2='modified'):
         # Plots ROC curves from multiple models on the same plot in order for comparison
         dat, mrsp, srsp, numPnt = self.checkIfSplit(split, test=True)
         
@@ -505,11 +527,13 @@ def normalize(data):
     stdevs[np.where(stdevs==0)] = 1
     return (data-means)*np.ones((l,1)).dot(1/stdevs)+means, means, stdevs
 
-def pcaPlots(prob, kernels=['Linear'], numPC=2, d=0, mu=1, lams=None, linCon=True, covCon=True, predBnd=150, N=25, perc=0.5, split=False):
+def pcaPlots(prob, kernels=['Linear'], numPC=2, d=0, mu=1, lams=None, linCon=True, covCon=True, predBnd=150, N=25, perc=0.5, split=False, norm=True):
 
     print('Fair PCA Parameters: numPC=%s, d=%s, mu=%s'%(numPC,d,mu))
-    #prob.data, means, stdevs = normalize(prob.data)
-    if split: prob.train, means, stdevs = normalize(prob.train)
+    if split:
+        prob.splitData(0.8)
+        if norm: prob.train, means, stdevs = normalize(prob.train)
+    elif norm: prob.data, means, stdevs = normalize(prob.data)
     if linCon and not covCon: B,m = prob.zpca(dimPCA=numPC,d=d,split=split)
     elif covCon: B,m = prob.spca(dimPCA=numPC,addLinear=linCon,mu=mu,d=d,split=split)
     else: B,m = prob.pca(dimPCA=numPC,split=split)
@@ -529,25 +553,28 @@ def pcaPlots(prob, kernels=['Linear'], numPC=2, d=0, mu=1, lams=None, linCon=Tru
         else:
             print('Linear constraint satisfied')
     
-    #prob.data = normalize(prob.data.dot(B))[0]
-    if split: prob.test, means, stdevs = normalize(((prob.test-means[:len(prob.test)])/stdevs[:len(prob.test)]+means[:len(prob.test)]).dot(B))
+    
+    if split:
+        if norm: prob.test = normalize(((prob.test-means[:len(prob.test)])/stdevs[:len(prob.test)]+means[:len(prob.test)]).dot(B))[0]
+        else: prob.test = normalize(prob.test.dot(B))[0]
+    else: prob.data = normalize(prob.data.dot(B))[0]
     prob.numFields = 2
     kernelDat = []
     for kernel in kernels:
-        print(kernel,'SVM:')
-        if kernel=='Linear': w, svm = prob.svm(useSRSP=True,outputFlag=True,split=split,lams=lams)[:2]
-        elif kernel=='Gaussian': w, svm = prob.svm(useSRSP=True,dual=True,kernel=lambda x,y: math.exp(-la.norm(x-y)**2/2),outputFlag=True,split=split,lams=lams)[:2]
-        elif kernel=='Polynomial': w, svm = prob.svm(useSRSP=True,dual=True,conic=False,kernel=lambda x,y: (x.T.dot(y)+1)**2,outputFlag=True,split=split,lams=lams)[:2]
+        print(kernel+' SVM:')
+        if kernel=='Linear': w,svm,err,b = prob.svm(useSRSP=True,outputFlag=True,split=split,lams=lams)
+        elif kernel=='Gaussian': w,svm,err,b = prob.svm(useSRSP=True,dual=True,kernel=lambda x,y: math.exp(-la.norm(x-y)**2/2),outputFlag=True,split=split,lams=lams)
+        elif kernel=='Polynomial': w,svm,err,b = prob.svm(useSRSP=True,dual=True,conic=False,kernel=lambda x,y: (x.T.dot(y)+1)**2,outputFlag=True,split=split,lams=lams)
         else:
             print('\tIncorrect kernel name')
             continue
         
         if svm.dual:
             pred = svm.K.dot(svm.alpha.flatten()*(2*svm.rsp-1))
-            err, b = maxROC(svm,prob.test if split else prob.data,prob.testSide if split else prob.sideResp,pred)
+            err, b = maxROC(prob.testSide if split else prob.sideResp,pred=pred)
             if numPC>1:
-                predIdx = np.argsort((pred-b)**2)
-                threshPts = prob.data[predIdx[:predBnd]]
+                predIdx = np.argsort(np.abs(pred-b))
+                threshPts = prob.test[predIdx[:predBnd]] if split else prob.data[predIdx[:predBnd]]
                 #func = lambda x: svm.alpha.T.dot(svm.getK(x))
                 #threshPts = np.array([newton_krylov(func,point) for point in threshPts])
                 x = threshPts[:,0]
@@ -566,7 +593,7 @@ def pcaPlots(prob, kernels=['Linear'], numPC=2, d=0, mu=1, lams=None, linCon=Tru
                 cumsum = np.cumsum(np.insert(y, 0, 0))
                 y = (cumsum[N:] - cumsum[:-N]) / float(N)
         else:
-            err, b = maxROC(svm,prob.test if split else prob.data,prob.testSide if split else prob.sideResp)
+            err, b = maxROC(prob.testSide if split else prob.sideResp,svm,prob.test if split else prob.data)
             if numPC>1:
                 dat = prob.test if split else prob.data
                 x = np.sort(dat[:,0])[[int(0.02*len(dat)),int(0.98*len(dat))]]
@@ -593,12 +620,11 @@ def pcaPlots(prob, kernels=['Linear'], numPC=2, d=0, mu=1, lams=None, linCon=Tru
                         idx = np.argmin(y)
                         y[idx] = 1.1*min(dat[:,1])-0.1*max(dat[:,1])
                         x[idx] = (b-svm.B[1]*y[idx])/svm.B[0]
-        #x = (x-means[0,0])*stdevs[0,0]+means[0,0]; y = (y-means[0,1])*stdevs[0,1]+means[0,1];
-        main,side,xthresh,ythresh = prob.plot(svm,perc=0.25,thresholds=[b],graph=False,split=split)
+        main,side,xthresh,ythresh = prob.plot(svm,perc=1,thresholds=[b],graph=False,split=split)
         kernelDat.append(kern(kernel,x,y,main,side,xthresh,ythresh))
-    graphs(prob.test if split else prob.data,prob.testSide if split else prob.sideResp,kernelDat,perc)
+    fig = graphs(prob.test if split else prob.data,prob.testSide if split else prob.sideResp,kernelDat,perc)
     winsound.PlaySound("SystemExit", winsound.SND_ALIAS)
-    return prob.test if split else prob.data, prob.testSide if split else prob.sideResp, B, kernelDat, w
+    return prob.test if split else prob.data, prob.testSide if split else prob.sideResp, B, kernelDat, w, fig
 
 def crossVal(prob, k=1, kernels=['Linear','Gaussian'], numPC=2, KSError=False, d=0, mu=1, normPCA=True, lams=None, linCon=True, covCon=True, dualize=True, outputFlag=True):
     # Given problem object, conducts 5-fold cross-validation with the parameters defined,
@@ -662,9 +688,9 @@ def crossVal(prob, k=1, kernels=['Linear','Gaussian'], numPC=2, KSError=False, d
         else:
             for kernum,kernel in enumerate(kernels):
                 if outputFlag: print(kernel,'SVM:')
-                if kernel=='Linear': svm, err = prob.svm(useSRSP=True,outputFlag=outputFlag,lams=lams)[1:]
-                elif kernel=='Gaussian': svm, err = prob.svm(useSRSP=True,dual=True,kernel=lambda x,y: math.exp(-la.norm(x-y)**2/2),outputFlag=outputFlag,lams=lams)[1:]
-                elif kernel=='Polynomial': svm, err = prob.svm(useSRSP=True,dual=True,conic=False,kernel=lambda x,y: (x.T.dot(y)+1)**2,outputFlag=outputFlag,lams=lams)[1:]
+                if kernel=='Linear': svm, err = prob.svm(useSRSP=True,outputFlag=outputFlag,lams=lams)[1:3]
+                elif kernel=='Gaussian': svm, err = prob.svm(useSRSP=True,dual=True,kernel=lambda x,y: math.exp(-la.norm(x-y)**2/2),outputFlag=outputFlag,lams=lams)[1:3]
+                elif kernel=='Polynomial': svm, err = prob.svm(useSRSP=True,dual=True,conic=False,kernel=lambda x,y: (x.T.dot(y)+1)**2,outputFlag=outputFlag,lams=lams)[1:3]
                 else:
                     if outputFlag: print('\tIncorrect kernel name')
                     continue
@@ -692,7 +718,7 @@ def multiDimCDF(data,rsp) -> np.ndarray:
     for x in range(numPnt-1): cdf[x+1:,sorty[xidx[x]]] = 0
     return np.flip(np.cumsum(cdf,axis=1),axis=1)
     
-def graphs(dat, srsp, kernelDat, perc=0.25, figsize=(3.5,3.5), title=True, axes=True):
+def graphs(dat, srsp, kernelDat, perc=0.25, figsize=(4.5,4.5), title=True, axes=True):
     # Given 2-D projected data, side response, and kernel info, plots both protected classes,
     # projected onto two dimensions, and shows all separating SVM provided
     numPC = dat.shape[1]
@@ -715,12 +741,13 @@ def graphs(dat, srsp, kernelDat, perc=0.25, figsize=(3.5,3.5), title=True, axes=
         graphROC(kernel.main,kernel.side,kernel.xthresh,kernel.ythresh,figsize=figsize)
     plt.figure(fig1.number)
     [item.set_fontsize(9) for item in plt.axes().axes.get_xticklabels()+plt.axes().axes.get_yticklabels()]
-    plt.xlim(2*plt.axes().axes.get_xlim()[0],2*plt.axes().axes.get_xlim()[1])
-    plt.ylim(2*plt.axes().axes.get_ylim()[0],2*plt.axes().axes.get_ylim()[1])
-    plt.legend(handles=hanline,fontsize=9)
+    plt.xlim(plt.axes().axes.get_xlim()[0],plt.axes().axes.get_xlim()[1])
+    plt.ylim(plt.axes().axes.get_ylim()[0],plt.axes().axes.get_ylim()[1])
+    #plt.legend(handles=hanline,fontsize=9)
+    fig1.get_axes()[0].set_axis_off()
     return fig1
     
-def graph3D(dat, srsp, figsize=(3.5,3.5), title=False, axes=True, perc=0.5):
+def graph3D(dat, srsp, figsize=(4.5,4.5), title=False, axes=True, perc=1):
     # Given 3D data and side response, plots both protected classes
     fig = plt.figure(figsize=figsize)
     ax = fig.add_subplot(111, projection='3d')
@@ -737,7 +764,26 @@ def graph3D(dat, srsp, figsize=(3.5,3.5), title=False, axes=True, perc=0.5):
     if title: ax.set_title('Original Data')
     [item.set_fontsize(9) for item in ax.get_xticklabels()+ax.get_yticklabels()+ax.get_zticklabels()]
     return fig
-    
+
+def graphROC(main, side, xthresh, ythresh, figsize=(6,6), title=None, axes=True):
+        fig = plt.figure(figsize=figsize)
+        plt.plot(side[0],side[1],color=[0.8500,0.3250,0.0980])
+        plt.plot(main[0],main[1],color=[0,0.4470,0.7410])
+        [[plt.plot([x,x],[0,y],':',color='pink'),plt.plot([0,x],[y,y],':',color='pink')]\
+          for (x,y) in zip(xthresh,ythresh)]
+        plt.plot([0,1],[0,1],'--',color=[0.5,0.5,0.5])
+        plt.xlim(0,1)
+        plt.ylim(0,1)
+        plt.xticks([0,0.5,1])
+        plt.yticks([0,0.5,1])
+        if axes: plt.xlabel('False Positives')
+        if axes: plt.ylabel('True Positivies')
+        if title is not None: plt.title(title)
+        for x,y in zip(xthresh,ythresh):
+            plt.text(x+0.01,0.01,str(round(x,2)))
+            plt.text(0.01,y+0.01,str(round(y,2)))
+        return fig
+
 def saveDat(filename,stuff):
     # Given data as list, saves to filename
     with open(filename+'.pickle','wb') as file:
@@ -748,72 +794,105 @@ def loadDat(filename):
     with open(filename+'.pickle','rb') as file:
         return cloudpickle.load(file)
 
+def stupid():
+    
+    names = ['Adult Income','Biodeg','E. Coli','Energy','German Credit','Image','Letter','Magic','Pima','Recidivism','SkillCraft','Statlog','Steel','Taiwan Credit','Wine Quality']
+    for i,(dataset,name) in enumerate(zip(datasets,names)):
+        prob = problem(dataset)
+    
+        # For large datasets
+        if i in [0,6,7,14]: prob.data = prob.data[:int(0.2*prob.numPoints)]; prob.mainResp = prob.mainResp[:int(0.2*prob.numPoints)]; prob.sideResp = prob.sideResp[:int(0.2*prob.numPoints)]; prob.numPoints = int(0.2*prob.numPoints)
+        
+        k=5
+        lams = np.logspace(-4,4,5)
+        err, varExp, totVar, eig, corr = crossVal(prob, k, normPCA=True, linCon=False, covCon=False, lams=lams,outputFlag=False)
+        err1, varExp1, totVar1, eig1, corr1 = crossVal(prob, k, normPCA=True, d=0, covCon=False, lams=lams,outputFlag=False)
+        err2, varExp2, totVar2, eig2, corr2 = crossVal(prob, k, mu=-0.2, dualize=False, normPCA=True, d=0, lams=lams,outputFlag=False)
+        le,ge = np.round(np.mean(err,axis=0),4)
+        le1,ge1 = np.round(np.mean(err1,axis=0),4)
+        le2,ge2 = np.round(np.mean(err2,axis=0),4)
+        ml = min(le,le1,le2)
+        mg = min(ge,ge1,ge2)
+        print(name,'&',round(100*np.mean(varExp/totVar),2),'&','\\bf' if le==ml else '',round(le,2),'&','\\bf' if ge==mg else '',round(ge,2),\
+              '&',round(100*np.mean(varExp1/totVar1),2),'&','\\bf' if le1==ml else '',round(le1,2),'&','\\bf' if ge==mg else '',round(ge1,2),\
+              '&',round(100*np.mean(varExp2/totVar2),2),'&','\\bf' if le2==ml else '',round(le2,2),'&','\\bf' if ge==mg else '',round(ge2,2),r'\\')
+
 def runAllDatasets() -> None:
     # Runs unconstrained PCA, FPCA with only the mean constraint, and FPCA with both
     # constraints on all datasets, cross-validated, and returns the average variation
     # explained, average deviation explained, and average fairness levels, with respect to
     # certain kernels, of each
-    for i,dataset in enumerate(datasets):
+    for dataset,name in datasets:
         prob = problem(dataset)
     
         # For large datasets
-        if i in [0,5,10,11]: prob.data = prob.data[:int(0.2*prob.numPoints)]; prob.mainResp = prob.mainResp[:int(0.2*prob.numPoints)]; prob.sideResp = prob.sideResp[:int(0.2*prob.numPoints)]; prob.numPoints = int(0.2*prob.numPoints)
+        if name in ['Adult Income','Letter','Magic','Taiwan Credit']: prob.data = prob.data[:int(0.2*prob.numPoints)]; prob.mainResp = prob.mainResp[:int(0.2*prob.numPoints)]; prob.sideResp = prob.sideResp[:int(0.2*prob.numPoints)]; prob.numPoints = int(0.2*prob.numPoints)
         
         k=5
         lams = np.logspace(-4,4,5)
-        print('#################### ',prob.filename,' ######################')
+        #print('#################### ',prob.filename,' ######################')
         err, varExp, totVar, eig, corr = crossVal(prob, k, normPCA=True, linCon=False, covCon=False, lams=lams,outputFlag=False)
         err1, varExp1, totVar1, eig1, corr1 = crossVal(prob, k, normPCA=True, d=0, covCon=False, lams=lams,outputFlag=False)
-        err2, varExp2, totVar2, eig2, corr2 = crossVal(prob, k, mu=-0.1, dualize=False, normPCA=True, d=0, lams=lams, outputFlag=False)
+        err2, varExp2, totVar2, eig2, corr2 = crossVal(prob, k, mu=0.01, dualize=True, normPCA=True, d=0, lams=lams, outputFlag=False)
         #stuff = [err,err1,err2,varExp,varExp1,varExp2,totVar,totVar1,totVar2,eig,eig1,eig2,corr,corr1,corr2]
-        #print('#############################################################')
-        print('perc variance: %s\nperc deviation: %s\nerrors: %s'%\
-              (round(100*np.mean(varExp/totVar),2),round(100*np.mean(np.sqrt(varExp/totVar)),2),np.round(np.mean(err),2)))
-        print('perc variance: %s\nperc deviation: %s\nerrors: %s'%\
-              (round(100*np.mean(varExp1/totVar1),2),round(100*np.mean(np.sqrt(varExp1/totVar1)),2),np.round(np.mean(err1),2)))
-        print('perc variance: %s\nperc deviation: %s\nerrors: %s'%\
-              (round(100*np.mean(varExp2/totVar2),2),round(100*np.mean(np.sqrt(varExp2/totVar2)),2),np.round(np.mean(err2),2)))
+        #print('perc variance: %s\nperc deviation: %s\nerrors: %s'%\
+        #      (round(100*np.mean(varExp/totVar),2),round(100*np.mean(np.sqrt(varExp/totVar)),2),np.round(np.mean(err),2)))
+        #print('perc variance: %s\nperc deviation: %s\nerrors: %s'%\
+        #      (round(100*np.mean(varExp1/totVar1),2),round(100*np.mean(np.sqrt(varExp1/totVar1)),2),np.round(np.mean(err1),2)))
+        #print('perc variance: %s\nperc deviation: %s\nerrors: %s'%\
+        #      (round(100*np.mean(varExp2/totVar2),2),round(100*np.mean(np.sqrt(varExp2/totVar2)),2),np.round(np.mean(err2),2)))
+        le,ge = np.round(np.mean(err,axis=0),4)
+        le1,ge1 = np.round(np.mean(err1,axis=0),4)
+        le2,ge2 = np.round(np.mean(err2,axis=0),4)
+        ml = min(le,le1,le2)
+        mg = min(ge,ge1,ge2)
+        print(name,'&',round(100*np.mean(varExp/totVar),2),'&','\\bf' if le==ml else '',round(le,2),'&','\\bf' if ge==mg else '',round(ge,2),\
+              '&',round(100*np.mean(varExp1/totVar1),2),'&','\\bf' if le1==ml else '',round(le1,2),'&','\\bf' if ge==mg else '',round(ge1,2),\
+              '&',round(100*np.mean(varExp2/totVar2),2),'&','\\bf' if le2==ml else '',round(le2,2),'&','\\bf' if ge==mg else '',round(ge2,2),r'\\')
+
 
 def pcaViz(prob, rand=False, split=False) -> None:
     # Generates 2-D visualizations of results of PCA algorithms
-    if split: prob.splitData(0.8)
+    mean1 = np.array([1,1,2])
+    mean2 = np.array([-1,-1,-1])
+    cov1 = np.array([[1.0,0.8,0.0],\
+                     [0.8,1.0,-1.0],\
+                     [0.0,-1.0,3.0]])
+    cov2 = np.array([[0.5,0.5,0.0],\
+                     [0.5,1.0,-1.2],\
+                     [0.0,-1.2,3.0]])
     if rand:
-        mean1 = np.array([1,1,2])
-        mean2 = np.array([-1,-1,-1])
-        cov1 = np.array([[1.0,0.8,0.0],\
-                         [0.8,1.0,-1.0],\
-                         [0.0,-1.0,3.0]])
-        cov2 = np.array([[0.5,0.5,0.0],\
-                         [0.5,1.0,-1.2],\
-                         [0.0,-1.2,3.0]])
         prob.setGaussData(mean1,mean2,cov1,cov2)
         fig = graph3D(prob.data,prob.sideResp)
+    if split: prob.splitData(0.8)
     prob1 = copy.deepcopy(prob)
     prob2 = copy.deepcopy(prob)
     lams = np.logspace(-4,4,5)
-    dat, srsp, B, ker, w = pcaPlots(prob,['Linear','Gaussian'],lams=lams,numPC=2,predBnd=150,perc=1,linCon=False,covCon=False,split=split)
-    dat1, srsp1, B1, ker1, w1 = pcaPlots(prob1,['Linear','Gaussian'],lams=lams,numPC=2,d=0,predBnd=150,perc=1,linCon=True,covCon=False,split=split)
-    dat2, srsp2, B2, ker2, w2 = pcaPlots(prob2,['Linear','Gaussian'],lams=lams,numPC=2,d=0,mu=1,predBnd=150,perc=1,linCon=True,covCon=True,split=split)
+    dat, srsp, B, ker, w, fg = pcaPlots(prob,['Linear','Gaussian'],lams=lams,numPC=2,predBnd=50,N=5,perc=1,linCon=False,covCon=False,split=split)
+    dat1, srsp1, B1, ker1, w1, fg1 = pcaPlots(prob1,['Linear','Gaussian'],lams=lams,numPC=2,d=0,predBnd=50,N=5,perc=1,linCon=True,covCon=False,split=split)
+    dat2, srsp2, B2, ker2, w2, fg2 = pcaPlots(prob2,['Linear','Gaussian'],lams=lams,numPC=2,d=0,mu=1,predBnd=50,N=5,perc=1,linCon=True,covCon=True,split=split)
     stuff = [dat,dat1,dat2,srsp,srsp1,srsp2,B,B1,B2,ker,ker1,ker2,mean1,mean2,cov1,cov2]
     #dat,dat1,dat2,srsp,srsp1,srsp2,B,B1,B2,ker,ker1,ker2,mean1,mean2,cov1,cov2 = loadDat('randData')
+    return fig,fg,fg1,fg2
 
 if __name__ == '__main__':
     global datasets
-    datasets = ['Adult_Income_Data.csv',        # 0 32561 \cite{Lichman:2013}
-                'German_Credit_Data.csv',       # 1 1000 \cite{Lichman:2013}
-                'Recidivism_Data.csv',          # 2 5279 \cite{angwin2016machine}
-                'Wine_Quality_Data.csv',        # 3 6497 \cite{cortez2009modeling}
-                'Pima_Diabetes_Data.csv',       # 4 768 \cite{smith1988using}
-                'Taiwanese_Credit_Data.csv',    # 5 29623 \cite{yeh2009comparisons}
-                'SkillCraft_Data.csv',          # 6 3339 \cite{thompson2013video}
-                'Energy_Data.csv',              # 7 768 \cite{tsanas2012accurate}
-                'Ecoli_Data.csv',               # 8 333 \cite{horton1996probabilistic}
-                'Image_Seg_Data.csv',           # 9 660 \cite{Lichman:2013}
-                'Letter_Rec_Data.csv',          # 10 20000 \cite{frey1991letter}
-                'Magic_Data.csv',               # 11 19020 \cite{bock2004methods}
-                'Parkinsons_Data.csv',          # 12 5875 \cite{Lichman:2013}
-                'Steel_Data.csv',               # 13 1941 \cite{Lichman:2013}
-                'Statlog_Data.csv',             # 14 3071 \cite{Lichman:2013}
-                'Biodeg_Data.csv']              # 15 1055 \cite{mansouri2013quantitative}
+    datasets = [('Adult_Income_Data.csv','Adult Income'),     # 0 32561 \cite{Lichman:2013}
+                ('Biodeg_Data.csv','Biodeg'),                  # 1 1055 \cite{mansouri2013quantitative}
+                ('Ecoli_Data.csv','E. Coli'),                  # 2 333 \cite{horton1996probabilistic}
+                ('Energy_Data.csv','Energy'),                  # 3 768 \cite{tsanas2012accurate}
+                ('German_Credit_Data.csv','German Credit'),    # 4 1000 \cite{Lichman:2013}
+                ('Image_Seg_Data.csv','Image'),                # 5 660 \cite{Lichman:2013}
+                ('Letter_Rec_Data.csv','Letter'),              # 6 20000 \cite{frey1991letter}
+                ('Magic_Data.csv','Magic'),                    # 7 19020 \cite{bock2004methods}
+                ('Parkinsons_Data.csv',"Parkinson's"),         # 8 5875 \cite{Lichman:2013}
+                ('Pima_Diabetes_Data.csv','Pima'),             # 9 768 \cite{smith1988using}
+                ('Recidivism_Data.csv','Recidivism'),          # 10 5279 \cite{angwin2016machine}
+                ('SkillCraft_Data.csv','SkillCraft'),          # 11 3339 \cite{thompson2013video}
+                ('Statlog_Data.csv','Statlog'),                # 12 3071 \cite{Lichman:2013}
+                ('Steel_Data.csv','Steel'),                    # 13 1941 \cite{Lichman:2013}
+                ('Taiwanese_Credit_Data.csv','Taiwan Credit'), # 14 29623 \cite{yeh2009comparisons}
+                ('Wine_Quality_Data.csv','Wine Quality')]      # 15 6497 \cite{cortez2009modeling}
     
     runAllDatasets()
+    

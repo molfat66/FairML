@@ -6,15 +6,16 @@ Created on Thu Oct 26 18:25:32 2017
 
 """
 
-import warnings, numpy as np, scipy.linalg as la
+import warnings, copy, numpy as np, scipy.linalg as la
 from gurMod import *
 from mosSVM import *
-#from mosPCA import *
+from mosSVMSDP import mosSVMSDP
+from mosPCA import *
 from mosPCAMult import *
-from sklearn.covariance import MinCovDet
-warnings.filterwarnings('ignore')
+#from sklearn.covariance import MinCovDet
+#warnings.filterwarnings('ignore')
 
-def maxROC(m,dat,rsp,pred=None,perc=1):
+def maxROCDepr(m,dat,rsp,pred=None,perc=1):
     if pred is None: pred = m.pred(dat)
     predSort = np.argsort(pred.flatten()).astype(int)
     rsp = rsp[predSort]
@@ -25,6 +26,22 @@ def maxROC(m,dat,rsp,pred=None,perc=1):
     brange = np.sort(np.random.choice(range(len(pred)),int(perc*len(pred)),replace=False))
     roc = np.abs(rsp1[brange]/sum1-rsp0[brange]/sum0)
     return max(roc), pred[predSort[brange[np.argmax(roc)]]]
+
+def maxROC(rsp, m=None, dat=None, pred=None, perc=1):
+    if pred is None and (dat is None or m is None): print('Not enough inputs')
+    if pred is None: pred = m.pred(dat)
+    if perc!=1: pred = copy.copy(pred[[np.sort(np.random.choice(range(len(pred)),int(perc*len(pred)),replace=False))]])
+    predSort = np.argsort(pred.flatten()).astype(int)
+    rsp = copy.copy(rsp[predSort])
+    sum1 = sum(rsp)
+    sum0 = sum(1-rsp)
+    if sum1==0 or sum0==0:
+        print('ONE OF SETS VACUOUS')
+        return
+    rsp1 = sum1-np.cumsum(rsp)
+    rsp0 = sum0-np.cumsum(1-rsp)
+    roc = np.abs(rsp1/sum1-rsp0/sum0)
+    return max(roc), pred[predSort[np.argmax(roc)]]
 
 class model():
     # A model object is the conduit through which all optimization is done. It stand to
@@ -53,6 +70,7 @@ class model():
         self.K = None
         self.Y = None
         self.dimPCA = dimPCA
+        self.lam = lam
         if self.dual:
             self.K = np.empty((self.numPoints,self.numPoints))
             self.K[np.tril_indices(self.numPoints)] = [kernel(dat[i],dat[j]) for i in range(self.numPoints) for j in range(i+1)]
@@ -141,13 +159,26 @@ class model():
         
     def addConstr(self, coeff, idx=0, rhs=0, label=None, record=True) -> None:
         # Handles the addition of a single linear constraint and records it
-        self.m.addConstr(coeff,idx,rhs,label,record) if self.isGur\
-        else self.m.addConstr(np.tensordot(coeff,coeff,axes=0),rhs**2)
-        #else self.m.addConstr(coeff, rhs, record) CHANGE BACK IF NOT MOSPCAMULT
+        if self.isGur: self.m.addConstr(coeff,idx,rhs,label,record)
+        elif self.isPCA: self.m.addConstr(np.tensordot(coeff,coeff,axes=0),rhs**2)
+        else: self.m.addConstr(coeff, rhs, record)
         if record: self.numProjCons += 1
     
-    def addQuadConstr(self, rsp, mu=1, B0=None, dualize=True):
+    def addQuadConstr(self, rsp, d=0, mu=1, mrsp=None, dualize=False):
         # Handles the addition of a single covariance constraint (ONLY FOR MOSEK)
+        if self.isGur:
+            print('Functionality not available with Gurobi')
+            return None
+        if self.isPCA:
+            self.m.addQuadConstr(self.getSig(rsp)-self.getSig(~rsp), mu, dualize)
+        else:
+            eigs, V = la.eigh(self.getSig(rsp)-self.getSig(~rsp))
+            pos = (eigs>0)
+            Sig, U = la.eigh(V[:,pos].dot(np.diag(eigs[pos])).dot(V[:,pos].T)-V[:,~pos].dot(np.diag(-eigs[~pos])).dot(V[:,~pos].T))
+            self.m = mosSVMSDP(self.m.dat.dot(U),mrsp,self.getZCon(rsp).dot(U),Sig,U,d=d,mu=mu,lam=self.lam,dual=dualize)
+    
+    def addQuadConstrOld(self, rsp, mu=1, B0=None, dualize=True):
+        # Handles the addition of a single covariance constraint (ONLY FOR MOSEK) (Deprecated)
         if self.isGur:
             print('Functionality not available with Gurobi')
             return None
@@ -206,7 +237,7 @@ class model():
                 self.optimize()
                 if self.getStatus()=='optimal':
                     if errType==0:
-                        avgErr += maxROC(self,dat1,rsp1)[0]
+                        avgErr += maxROC(rsp1,self,dat1)[0]
                     elif errType==1:
                         avgErr += abs(np.sum(rsp1*(dat1.dot(self.B)+self.b>=0)[:,0])/(np.sum(rsp1))\
                                       -np.sum((1-rsp1)*(dat1.dot(self.B)+self.b>=0)[:,0])/np.sum(1-rsp1))
@@ -214,7 +245,7 @@ class model():
                         avgErr += (self.ObjVal-lam*self.B.T.dot(self.B))
                     else:
                         print('Invalid error type, using max ROC error')
-                        avgErr += maxROC(self,self.m.dat,self.rsp)[0]
+                        avgErr += maxROC(self.rsp,self,self.m.dat)[0]
                 else:
                     avgErr += 1e12
                 self.m.reinstateConstrs(fold) if self.isGur else self.m.reinstateConstrs()
@@ -223,5 +254,6 @@ class model():
         #    plt.plot([math.log(lam) for lam in lams],avgErrs)
         optLam = lams[avgErrs.index(max(avgErrs))]
         self.m.setLam(optLam)
+        self.lam = optLam
         #print('Optimal lambda:',np.log10(optLam))
         return optLam
